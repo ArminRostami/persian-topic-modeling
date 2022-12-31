@@ -6,8 +6,82 @@ from hazm import (
 )
 import numpy as np
 import time
+import arabic_reshaper
+from bidi.algorithm import get_display
+import gensim.corpora as corpora
+import gensim
 
 inormalizer = InformalNormalizer()
+stop_list = [
+    "و",
+    "از",
+    "با",
+    "که",
+    "را",
+    "به",
+    "در",
+    "این",
+    "تو",
+    "برای",
+    "آن",
+    "می",
+    "تا",
+    "ما",
+    "ها",
+    "های",
+    "روز",
+    "من",
+    "هم",
+    "بی",
+    "یک",
+    "ای",
+    "رو",
+    "هر",
+    "یا",
+    "شده",
+    "باید",
+    "بر",
+    "ی",
+    "کرد#کن",
+    "شد#شو",
+    "بود#باش",
+    "داشت#دار",
+    "خواست#خواه",
+    "گفت#گو",
+    "#است",
+    "#هست",
+    "داد#ده",
+    "دیگر",
+    "همه",
+    "چه",
+    "ولی",
+    "شنبه",
+    "بازنشر",
+    "اگر",
+    "دی",
+    "ماه",
+    "کردن",
+    "یلدا",
+    "سه",
+    "محمد",
+    "بعد",
+    "کیان",
+    "خود",
+    "نیست",
+    "آذر",
+    "دست",
+    "انقلاب",
+    "ایران",
+    "جمهوری",
+    "اسلام",
+    "مردم",
+    "آزاد",
+    "زن",
+    "زندگی",
+    "شب",
+    # "تهران",
+    # "شهر",
+]
 
 
 def remove_hashtags(text):
@@ -17,12 +91,12 @@ def remove_hashtags(text):
 
 
 def replace_newline(text):
-    table = str.maketrans({"\n": " ", "\u200C": " "})
+    table = str.maketrans({"\n": " "})
     return text.translate(table)
 
 
 def remove_non_farsi(text):
-    text = re.sub(r"[^\u0620-\u064A\u0674-\u06D5 ]+", "", text)
+    text = re.sub(r"[^\u0620-\u064A\u0674-\u06D5\u200C ]+", "", text)
     return text
 
 
@@ -55,6 +129,9 @@ def tokenize(text):
 
 
 def formalize(word):
+    abbrs = {"ج": "جمهوری", "ا": "اسلام"}
+    if word in abbrs:
+        return abbrs[word]
 
     if word in inormalizer.lemmatizer.words or word in inormalizer.lemmatizer.verbs:
         return word
@@ -99,9 +176,30 @@ def formalize(word):
     return word
 
 
+def delete_stop_words(tokens):
+    criteria = np.where(np.isin(tokens, stop_list))
+    return np.delete(tokens, criteria)
+
+
+def create_model(df):
+    id2word = corpora.Dictionary(df["tokens"])
+    num_topics = 5
+    corpus = df["tokens"].apply(id2word.doc2bow)
+
+    # TODO: optimize func params
+    lda_model = gensim.models.LdaMulticore(
+        corpus=corpus, id2word=id2word, num_topics=num_topics, passes=10
+    )
+    # TODO: write topic number to df
+
+    topics = lda_model.print_topics()
+    for i, topic in enumerate(topics):
+        print(f"topic {i+1}: ", get_display(arabic_reshaper.reshape(topic[1])), "\n")
+
+
 def main():
     cols = ["tweet_id", "text"]
-    df = pd.read_csv("./tweets.csv", usecols=cols, nrows=1000)
+    df = pd.read_csv("./tweets.csv", usecols=cols)
 
     df = clean_text(df)
 
@@ -118,11 +216,18 @@ def main():
     df["tokens"] = df["tokens"].apply(vlemma)
     end = time.time()
 
-    df[["tweet_id", "text", "tokens"]].to_csv("./clean.csv")
+    df["tokens"] = df["tokens"].apply(delete_stop_words)
+    df["len"] = df["tokens"].apply(len)
+    df = df[df["len"] > 5]
 
-    print("normalization time: ", mid - start)
-    print("lemmatization time: ", end - mid)
+    create_model(df)
+
+    df[["tweet_id", "tokens", "text"]].head(100000).to_csv("./clean.csv")
+
+    # print("normalization time: ", mid - start)
+    # print("lemmatization time: ", end - mid)
 
 
 if __name__ == "__main__":
     main()
+#
