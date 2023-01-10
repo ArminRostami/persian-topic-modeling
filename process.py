@@ -1,15 +1,15 @@
 import pandas as pd
 import re
 from hazm import (
+    Normalizer,
     Lemmatizer,
     InformalNormalizer,
 )
 import numpy as np
 import time
-import arabic_reshaper
-from bidi.algorithm import get_display
-import gensim.corpora as corpora
+
 import gensim
+from gsdmm import MovieGroupProcess
 
 inormalizer = InformalNormalizer()
 stop_list = [
@@ -42,6 +42,7 @@ stop_list = [
     "باید",
     "بر",
     "ی",
+    "ویروس",
     "کرد#کن",
     "شد#شو",
     "بود#باش",
@@ -55,30 +56,31 @@ stop_list = [
     "همه",
     "چه",
     "ولی",
+    "خیلی",
     "شنبه",
     "بازنشر",
     "اگر",
     "دی",
     "ماه",
     "کردن",
-    "یلدا",
     "سه",
-    "محمد",
     "بعد",
-    "کیان",
     "خود",
     "نیست",
     "آذر",
     "دست",
     "انقلاب",
-    "ایران",
     "جمهوری",
     "اسلام",
-    "مردم",
-    "آزاد",
-    "زن",
-    "زندگی",
-    "شب",
+    # "محمد",
+    # "کیان",
+    # "یلدا",
+    # "ایران",
+    # "مردم",
+    # "آزاد",
+    # "زن",
+    # "زندگی",
+    # "شب",
     # "تهران",
     # "شهر",
 ]
@@ -181,51 +183,130 @@ def delete_stop_words(tokens):
     return np.delete(tokens, criteria)
 
 
-def create_model(df):
-    id2word = corpora.Dictionary(df["tokens"])
-    num_topics = 5
-    corpus = df["tokens"].apply(id2word.doc2bow)
+def get_topics_lists(model, top_clusters, n_words):
+    # create empty list to contain topics
+    topics = []
 
-    # TODO: optimize func params
-    lda_model = gensim.models.LdaMulticore(
-        corpus=corpus, id2word=id2word, num_topics=num_topics, passes=10
+    # iterate over top n clusters
+    for cluster in top_clusters:
+        # create sorted dictionary of word distributions
+        sorted_dict = sorted(
+            model.cluster_word_distribution[cluster].items(),
+            key=lambda k: k[1],
+            reverse=True,
+        )[:n_words]
+
+        # create empty list to contain words
+        topic = []
+
+        # iterate over top n words in topic
+        for k, v in sorted_dict:
+            # append words to topic list
+            topic.append(k)
+
+        # append topics to topics list
+        topics.append(topic)
+
+    return topics
+
+
+def create_dictionary(docs):
+
+    dictionary = gensim.corpora.Dictionary(docs)
+
+    dictionary.filter_extremes(no_below=5, no_above=0.5, keep_n=100000)
+
+    dictionary.save_as_text("./dict.txt")
+
+    return dictionary
+
+
+def create_gsdmm_model(df):
+    docs = df["tokens"]
+
+    dictionary = create_dictionary(docs)
+
+    vocab_length = len(dictionary)
+
+    bow_corpus = [dictionary.doc2bow(doc) for doc in docs]
+
+    gsdmm = MovieGroupProcess(K=7, alpha=0.1, beta=0.3, n_iters=10)
+
+    y = gsdmm.fit(docs, vocab_length)
+
+    doc_count = np.array(gsdmm.cluster_doc_count)
+    print("Number of documents per topic :", doc_count)
+
+    # Topics sorted by the number of document they are allocated to
+    top_index = doc_count.argsort()[-15:][::-1]
+    print("Most important clusters (by number of docs inside):", top_index)
+
+    # define function to get top words per topic
+    def top_words(cluster_word_distribution, top_cluster, values):
+        for cluster in top_cluster:
+            sort_dicts = sorted(
+                cluster_word_distribution[cluster].items(),
+                key=lambda k: k[1],
+                reverse=True,
+            )[:values]
+            print("\nCluster %s : %s" % (cluster, sort_dicts))
+
+    # get top words in topics
+    top_words(gsdmm.cluster_word_distribution, top_index, 20)
+
+    topics = get_topics_lists(gsdmm, top_index, 20)
+
+    # evaluate model using Topic Coherence score
+    cm_gsdmm = gensim.models.CoherenceModel(
+        topics=topics,
+        dictionary=dictionary,
+        corpus=bow_corpus,
+        texts=docs,
+        coherence="c_v",
     )
-    # TODO: write topic number to df
 
-    topics = lda_model.print_topics()
-    for i, topic in enumerate(topics):
-        print(f"topic {i+1}: ", get_display(arabic_reshaper.reshape(topic[1])), "\n")
+    # get coherence value
+    coherence_gsdmm = cm_gsdmm.get_coherence()
+
+    print(coherence_gsdmm)
+
+    return y
 
 
 def main():
+    np.random.seed(10)
     cols = ["tweet_id", "text"]
-    df = pd.read_csv("./tweets.csv", usecols=cols)
+    df = pd.read_csv("./tweets.csv", usecols=cols, nrows=100000)
 
+    start = time.time()
     df = clean_text(df)
+    vnorm = np.vectorize(Normalizer().normalize)
+    df["clean_text"] = df["clean_text"].apply(vnorm)
 
     df["tokens"] = df["clean_text"].apply(tokenize)
     df["len"] = df["tokens"].apply(len)
     df = df[df["len"] > 5]
 
-    start = time.time()
-    vnorm = np.vectorize(formalize)
-    df["tokens"] = df["tokens"].apply(vnorm)
-    mid = time.time()
+    vinorm = np.vectorize(formalize)
+    df["tokens"] = df["tokens"].apply(vinorm)
 
     vlemma = np.vectorize(Lemmatizer().lemmatize)
     df["tokens"] = df["tokens"].apply(vlemma)
-    end = time.time()
 
     df["tokens"] = df["tokens"].apply(delete_stop_words)
     df["len"] = df["tokens"].apply(len)
     df = df[df["len"] > 5]
+    mid = time.time()
 
-    create_model(df)
+    print("starting model creation...")
+    y = create_gsdmm_model(df)
+    df["topic"] = y
+    end = time.time()
 
-    df[["tweet_id", "tokens", "text"]].head(100000).to_csv("./clean.csv")
+    df[["tweet_id", "tokens", "text", "topic"]].head(50000).to_csv("./clean.csv")
 
-    # print("normalization time: ", mid - start)
-    # print("lemmatization time: ", end - mid)
+    print("preprocessing time: ", mid - start)
+    print("modelling time: ", end - mid)
 
 
 if __name__ == "__main__":
