@@ -1,10 +1,6 @@
 import pandas as pd
 import re
-from hazm import (
-    Normalizer,
-    Lemmatizer,
-    InformalNormalizer,
-)
+from hazm import Normalizer, Lemmatizer, InformalNormalizer
 import numpy as np
 import time
 
@@ -29,7 +25,6 @@ stop_list = [
     "ما",
     "ها",
     "های",
-    "روز",
     "من",
     "هم",
     "بی",
@@ -57,21 +52,24 @@ stop_list = [
     "چه",
     "ولی",
     "خیلی",
-    "شنبه",
     "بازنشر",
     "اگر",
-    "دی",
-    "ماه",
+    "نیست",
     "کردن",
-    "سه",
     "بعد",
     "خود",
-    "نیست",
-    "آذر",
     "دست",
-    "انقلاب",
-    "جمهوری",
-    "اسلام",
+    "روز",
+    "دی",
+    "آذر",
+    "شنبه",
+    "یکشنبه",
+    "ماه",
+    # "سه",
+    # "انقلاب",
+    # "جمهوری",
+    # "اسلام",
+    #
     # "محمد",
     # "کیان",
     # "یلدا",
@@ -210,27 +208,28 @@ def get_topics_lists(model, top_clusters, n_words):
     return topics
 
 
-def create_dictionary(docs):
+def create_dictionary(docs, remove_n):
 
     dictionary = gensim.corpora.Dictionary(docs)
 
     dictionary.filter_extremes(no_below=5, no_above=0.5, keep_n=100000)
+    dictionary.filter_n_most_frequent(remove_n)
 
     dictionary.save_as_text("./dict.txt")
 
     return dictionary
 
 
-def create_gsdmm_model(df):
+def create_gsdmm_model(df, hp):
     docs = df["tokens"]
 
-    dictionary = create_dictionary(docs)
+    dictionary = create_dictionary(docs, hp["remove_n"])
 
     vocab_length = len(dictionary)
 
-    bow_corpus = [dictionary.doc2bow(doc) for doc in docs]
-
-    gsdmm = MovieGroupProcess(K=7, alpha=0.1, beta=0.3, n_iters=10)
+    gsdmm = MovieGroupProcess(
+        K=hp["num_topics"], alpha=hp["alpha"], beta=hp["beta"], n_iters=hp["iters"]
+    )
 
     y = gsdmm.fit(docs, vocab_length)
 
@@ -260,7 +259,7 @@ def create_gsdmm_model(df):
     cm_gsdmm = gensim.models.CoherenceModel(
         topics=topics,
         dictionary=dictionary,
-        corpus=bow_corpus,
+        # corpus=bow_corpus,
         texts=docs,
         coherence="c_v",
     )
@@ -268,15 +267,26 @@ def create_gsdmm_model(df):
     # get coherence value
     coherence_gsdmm = cm_gsdmm.get_coherence()
 
-    print(coherence_gsdmm)
+    print("\nCoherence: ", coherence_gsdmm)
 
     return y
 
 
 def main():
-    np.random.seed(10)
-    cols = ["tweet_id", "text"]
-    df = pd.read_csv("./tweets.csv", usecols=cols, nrows=100000)
+    np.random.seed(1)
+    hparams = {
+        "num_topics": 10,
+        "iters": 10,
+        "alpha": 0.1,
+        "beta": 0.3,
+        "num_tweets": 300000,
+        "remove_n": 50,
+    }
+
+    cols = ["tweet_id", "text", "likes"]
+    df = pd.read_csv("./tweets.csv", usecols=cols)
+    has_likes = df["likes"] > 0
+    df = df[has_likes].head(hparams["num_tweets"])
 
     start = time.time()
     df = clean_text(df)
@@ -293,16 +303,19 @@ def main():
     vlemma = np.vectorize(Lemmatizer().lemmatize)
     df["tokens"] = df["tokens"].apply(vlemma)
 
+    df["tokens"] = df["tokens"].apply(np.unique)
+
     df["tokens"] = df["tokens"].apply(delete_stop_words)
     df["len"] = df["tokens"].apply(len)
     df = df[df["len"] > 5]
+
     mid = time.time()
 
     print("starting model creation...")
-    y = create_gsdmm_model(df)
+    y = create_gsdmm_model(df, hparams)
     df["topic"] = y
     end = time.time()
-
+    print(hparams)
     df[["tweet_id", "tokens", "text", "topic"]].head(50000).to_csv("./clean.csv")
 
     print("preprocessing time: ", mid - start)
@@ -311,4 +324,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-#
