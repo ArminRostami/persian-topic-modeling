@@ -1,96 +1,24 @@
-import pandas as pd
-import re
 from hazm import Normalizer, Lemmatizer, InformalNormalizer
+import re
 import numpy as np
 import time
-from random import choice, randint
-from multiprocessing import Pool, cpu_count
-import os.path as path
 
-import gensim
-from gsdmm import MovieGroupProcess
 
+stop_list = []
 inormalizer = InformalNormalizer()
-stop_list = [
-    "و",
-    "از",
-    "با",
-    "که",
-    "را",
-    "به",
-    "در",
-    "این",
-    "تو",
-    "برای",
-    "آن",
-    "می",
-    "تا",
-    "ما",
-    "ها",
-    "های",
-    "من",
-    "هم",
-    "بی",
-    "یک",
-    "ای",
-    "رو",
-    "هر",
-    "یا",
-    "شده",
-    "باید",
-    "بر",
-    "ی",
-    "ویروس",
-    "کرد#کن",
-    "شد#شو",
-    "بود#باش",
-    "داشت#دار",
-    "خواست#خواه",
-    "گفت#گو",
-    "#است",
-    "#هست",
-    "داد#ده",
-    "دیگر",
-    "همه",
-    "چه",
-    "ولی",
-    "خیلی",
-    "بازنشر",
-    "اگر",
-    "نیست",
-    "کردن",
-    "بعد",
-    "خود",
-    "دست",
-    "روز",
-    "دی",
-    "آذر",
-    "شنبه",
-    "یکشنبه",
-    "ماه",
-    "انقلاب",
-    # "جمهوری",
-    # "اسلام",
-    # "سه",
-    #
-    # "محمد",
-    # "کیان",
-    # "یلدا",
-    # "ایران",
-    # "مردم",
-    # "آزاد",
-    # "زن",
-    # "زندگی",
-    # "شب",
-    # "تهران",
-    # "شهر",
-]
+
+
+def read_stop_words():
+    with open("stop_list.txt", "r") as list:
+        for word in list:
+            if not word.startswith("-"):
+                stop_list.append(word.strip("\n"))
 
 
 def remove_hashtags(text):
-    text = re.sub("#مهسا_امینی", "", text)
+    text = re.sub(r"#مهسا_امینی", "", text)
     # text = re.sub("\n\s*#.*", "", text)
-    text = re.sub("\n#\S+", "", text)
+    text = re.sub(r"\n\s*#[^\n]*", "", text)
     return text
 
 
@@ -116,8 +44,8 @@ def remove_punctuation(text):
 
 
 def clean_text(df):
-    df["clean_text"] = (
-        df["text"]
+    df.loc[:, "clean_text"] = (
+        df.loc[:, "text"]
         .apply(remove_hashtags)
         .apply(remove_mentions)
         .apply(replace_newline)
@@ -133,7 +61,7 @@ def tokenize(text):
 
 
 def formalize(word):
-    abbrs = {"ج": "جمهوری", "ا": "اسلام"}
+    abbrs = {"ج": "جمهوری", "ا": "اسلام", "خونه": "خانه"}
     if word in abbrs:
         return abbrs[word]
 
@@ -185,57 +113,6 @@ def delete_stop_words(tokens):
     return np.delete(tokens, criteria)
 
 
-def get_topics_lists(model, top_clusters, n_words):
-    # create empty list to contain topics
-    topics = []
-
-    # iterate over top n clusters
-    for cluster in top_clusters:
-        # create sorted dictionary of word distributions
-        sorted_dict = sorted(
-            model.cluster_word_distribution[cluster].items(),
-            key=lambda k: k[1],
-            reverse=True,
-        )[:n_words]
-
-        # create empty list to contain words
-        topic = []
-
-        # iterate over top n words in topic
-        for k, _ in sorted_dict:
-            # append words to topic list
-            topic.append(k)
-
-        # append topics to topics list
-        topics.append(topic)
-
-    return topics
-
-
-def get_topic_top_words(cluster_word_distribution, top_cluster, values):
-    res = ""
-    for cluster in top_cluster:
-        sort_dicts = sorted(
-            cluster_word_distribution[cluster].items(),
-            key=lambda k: k[1],
-            reverse=True,
-        )[:values]
-        res += f"\nCluster {cluster} : {sort_dicts}"
-    return res
-
-
-def create_dictionary(docs, remove_n):
-
-    dictionary = gensim.corpora.Dictionary(docs)
-
-    dictionary.filter_extremes(no_below=5, no_above=0.5, keep_n=100000)
-    dictionary.filter_n_most_frequent(remove_n)
-
-    # dictionary.save_as_text("./dict.txt")
-
-    return dictionary
-
-
 def preprocess(df):
     start = time.time()
 
@@ -258,7 +135,8 @@ def preprocess(df):
 
     df["tokens"] = df["tokens"].apply(np.unique)
 
-    df["tokens"] = df["tokens"].apply(delete_stop_words)
+    # read_stop_words()
+    # df["tokens"] = df["tokens"].apply(delete_stop_words)
 
     df["len"] = df["tokens"].apply(len)
     df = df[df["len"] > 5]
@@ -267,107 +145,6 @@ def preprocess(df):
     return df
 
 
-def create_gsdmm_model(args):
-    start = time.time()
-    df, hp = args
-    np.random.seed(hp["random_state"])
-
-    docs = df["tokens"]
-
-    dictionary = create_dictionary(docs, hp["remove_n"])
-
-    vocab_length = len(dictionary)
-
-    gsdmm = MovieGroupProcess(
-        K=hp["num_topics"], alpha=hp["alpha"], beta=hp["beta"], n_iters=hp["iters"]
-    )
-
-    topic_model = gsdmm.fit(docs, vocab_length)
-    print("modelling time: ", time.time() - start)
-
-    doc_count = np.array(gsdmm.cluster_doc_count)
-    print("Number of documents per topic :", doc_count)
-
-    # Topics sorted by the number of document they are allocated to
-    top_index = doc_count.argsort()[-15:][::-1]
-
-    # print("Most important clusters (by number of docs inside):", top_index)
-    # print(get_topic_top_words(gsdmm.cluster_word_distribution, top_index, 20))
-
-    topics = get_topics_lists(gsdmm, top_index, 20)
-
-    return topic_model, topics, dictionary, hp
-
-
-def get_coherence(topics, dictionary, docs):
-    coherence = -1
-    try:
-        coherence = gensim.models.CoherenceModel(
-            topics=topics,
-            dictionary=dictionary,
-            texts=docs,
-            coherence="c_v",
-        ).get_coherence()
-    except:
-        print("\ncould not calculate coherence.")
-
-    return coherence
-
-
-def random_search(df, num_runs):
-    topic_count = range(4, 30, 2)
-    iter_count = range(5, 30, 5)
-    hprange = [0.01, 0.03, 0.1, 0.2, 0.3, 0.4, 0.5]
-    remove_range = range(0, 80, 10)
-
-    tasks = []
-    for _ in range(num_runs):
-        hparams = {
-            "random_state": randint(0, 100000),
-            "num_topics": choice(topic_count),
-            "iters": choice(iter_count),
-            "alpha": choice(hprange),
-            "beta": choice(hprange),
-            "remove_n": choice(remove_range),
-        }
-        tasks.append((df, hparams))
-
-    NUM_WORKERS = cpu_count()
-    with Pool(NUM_WORKERS) as pool:
-        results = pool.map(create_gsdmm_model, tasks)
-
-    results_df = pd.DataFrame()
-    if path.exists("./hparams.csv"):
-        results_df = pd.read_csv("./hparams.csv", index_col=0)
-
-    max_score = 0
-    best_params = None
-
-    for res in results:
-        topic_model, topics, dictionary, hp = res
-        cs = get_coherence(topics, dictionary, df["tokens"])
-        hp["coherence"] = cs
-        results_df = pd.concat([results_df, pd.DataFrame([hp])], ignore_index=True)
-
-        if cs > max_score:
-            max_score = cs
-            best_params = hp
-
-    results_df.to_csv("./hparams.csv")
-
-    return best_params
-
-
-def main():
-
-    cols = ["tweet_id", "text", "likes"]
-    df = pd.read_csv("./tweets.csv", usecols=cols)
-
-    df = preprocess(df)
-    best_params = random_search(df, 20)
-
-    print("best run params: ", best_params)
-
-
 if __name__ == "__main__":
-    main()
+    read_stop_words()
+    print(stop_list)

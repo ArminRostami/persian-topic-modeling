@@ -1,5 +1,7 @@
 resources
 .vscode
 *.csv
-*.txt
+next_token.txt
+dict.txt
 test*
+_*
