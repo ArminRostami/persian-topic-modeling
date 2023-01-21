@@ -2,22 +2,22 @@ from hazm import Normalizer, Lemmatizer, InformalNormalizer
 import re
 import numpy as np
 import time
-
-
-stop_list = []
-inormalizer = InformalNormalizer()
+import gensim
 
 
 def read_stop_words():
+    stop_list = []
+
     with open("stop_list.txt", "r") as list:
         for word in list:
             if not word.startswith("-"):
                 stop_list.append(word.strip("\n"))
 
+    return stop_list
+
 
 def remove_hashtags(text):
     text = re.sub(r"#مهسا_امینی", "", text)
-    # text = re.sub("\n\s*#.*", "", text)
     text = re.sub(r"\n\s*#[^\n]*", "", text)
     return text
 
@@ -44,8 +44,8 @@ def remove_punctuation(text):
 
 
 def clean_text(df):
-    df.loc[:, "clean_text"] = (
-        df.loc[:, "text"]
+    df["clean_text"] = (
+        df["text"]
         .apply(remove_hashtags)
         .apply(remove_mentions)
         .apply(replace_newline)
@@ -60,7 +60,7 @@ def tokenize(text):
     return np.array(tokens)
 
 
-def formalize(word):
+def formalize(word, inormalizer):
     abbrs = {"ج": "جمهوری", "ا": "اسلام", "خونه": "خانه"}
     if word in abbrs:
         return abbrs[word]
@@ -108,9 +108,33 @@ def formalize(word):
     return word
 
 
-def delete_stop_words(tokens):
-    criteria = np.where(np.isin(tokens, stop_list))
-    return np.delete(tokens, criteria)
+def create_dictionary(df):
+    dictionary = gensim.corpora.Dictionary(df["tokens"])
+    stop_list = read_stop_words()
+    bad_ids = [dictionary.token2id[word] for word in stop_list]
+    dictionary.filter_tokens(bad_ids)
+    dictionary.filter_extremes()
+
+    # dictionary.save_as_text("./dict.txt")
+    return dictionary
+
+
+def apply_dict_to_docs(df, dictionary):
+    df["tokens"] = df["tokens"].apply(dictionary.doc2idx)
+
+    def del_nones(list):
+        arr = np.array(list)
+        return arr[arr != -1]
+
+    df["tokens"] = df["tokens"].apply(del_nones)
+
+    vget = np.vectorize(dictionary.get, otypes="U")
+    df["tokens"] = df["tokens"].apply(vget)
+
+    df["len"] = df["tokens"].apply(len)
+    df = df[df["len"] > 0]
+
+    return df
 
 
 def preprocess(df):
@@ -125,9 +149,10 @@ def preprocess(df):
 
     df["tokens"] = df["clean_text"].apply(tokenize)
     df["len"] = df["tokens"].apply(len)
-    df = df[df["len"] > 5]
+    df = df[df["len"] > 0]
 
-    vinorm = np.vectorize(formalize)
+    inormalizer = InformalNormalizer()
+    vinorm = np.vectorize(lambda x: formalize(x, inormalizer))
     df["tokens"] = df["tokens"].apply(vinorm)
 
     vlemma = np.vectorize(Lemmatizer().lemmatize)
@@ -135,16 +160,8 @@ def preprocess(df):
 
     df["tokens"] = df["tokens"].apply(np.unique)
 
-    # read_stop_words()
-    # df["tokens"] = df["tokens"].apply(delete_stop_words)
-
     df["len"] = df["tokens"].apply(len)
-    df = df[df["len"] > 5]
+    df = df[df["len"] > 0]
     print("preprocessing time: ", time.time() - start)
 
     return df
-
-
-if __name__ == "__main__":
-    read_stop_words()
-    print(stop_list)
