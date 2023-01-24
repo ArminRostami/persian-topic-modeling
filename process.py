@@ -2,7 +2,7 @@ from hazm import Normalizer, Lemmatizer, InformalNormalizer
 import re
 import numpy as np
 import time
-import gensim
+from gensim.corpora import Dictionary
 
 
 def read_stop_words():
@@ -33,7 +33,7 @@ def remove_non_farsi(text):
 
 
 def remove_mentions(text):
-    text = re.sub("@\S+", "", text)
+    text = re.sub(r"@\S+", "", text)
     return text
 
 
@@ -56,7 +56,7 @@ def clean_text(df):
 
 
 def tokenize(text):
-    tokens = re.findall("\w+", text)
+    tokens = re.findall(r"\w+", text)
     return np.array(tokens)
 
 
@@ -109,13 +109,14 @@ def formalize(word, inormalizer):
 
 
 def create_dictionary(df):
-    dictionary = gensim.corpora.Dictionary(df["tokens"])
+    dictionary = Dictionary(df["tokens"])
     stop_list = read_stop_words()
     bad_ids = [dictionary.token2id[word] for word in stop_list]
     dictionary.filter_tokens(bad_ids)
-    dictionary.filter_extremes()
+    dictionary.filter_extremes(no_below=2)
+    # for word in dictionary.most_common(200):
+    #     print(f"{word[0]}")
 
-    # dictionary.save_as_text("./dict.txt")
     return dictionary
 
 
@@ -132,7 +133,7 @@ def apply_dict_to_docs(df, dictionary):
     df["tokens"] = df["tokens"].apply(vget)
 
     df["len"] = df["tokens"].apply(len)
-    df = df[df["len"] > 0]
+    df = df[df["len"] > 2]
 
     return df
 

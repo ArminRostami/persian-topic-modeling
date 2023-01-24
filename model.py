@@ -6,8 +6,10 @@ import time
 import numpy as np
 from process import preprocess, create_dictionary, apply_dict_to_docs
 
-import gensim
+from gensim.models import CoherenceModel
 from gsdmm import MovieGroupProcess
+
+HPARAM_FILE = "hparams.csv"
 
 
 def get_topics_lists(model, top_clusters, n_words):
@@ -31,21 +33,21 @@ def get_topics_lists(model, top_clusters, n_words):
     return topics
 
 
-def get_topic_top_words(cluster_word_distribution, top_cluster, values):
+def get_topic_top_words(cluster_word_distribution, top_cluster, count):
     res = ""
     for cluster in top_cluster:
         sort_dicts = sorted(
             cluster_word_distribution[cluster].items(),
             key=lambda k: k[1],
             reverse=True,
-        )[:values]
+        )[:count]
         res += f"\nCluster {cluster} : {sort_dicts}"
     return res
 
 
 def create_gsdmm_model(args):
     start = time.time()
-    df, dictionary, hp = args
+    docs, dictionary, hp = args
     np.random.seed(hp["random_state"])
 
     vocab_length = len(dictionary)
@@ -54,43 +56,41 @@ def create_gsdmm_model(args):
         K=hp["num_topics"], alpha=hp["alpha"], beta=hp["beta"], n_iters=hp["iters"]
     )
 
-    topic_model = gsdmm.fit(df["tokens"], vocab_length)
+    topic_model = gsdmm.fit(docs, vocab_length)
     print("modelling time: ", time.time() - start)
-    df["topics"] = topic_model
 
     doc_count = np.array(gsdmm.cluster_doc_count)
     print("Number of documents per topic :", doc_count)
 
     top_index = doc_count.argsort()[::-1]
 
-    print(get_topic_top_words(gsdmm.cluster_word_distribution, top_index, 20))
+    print(get_topic_top_words(gsdmm.cluster_word_distribution, top_index, 40))
 
     topics = get_topics_lists(gsdmm, top_index, 20)
 
-    return df, topics, hp
+    return topic_model, topics, hp
 
 
 def get_coherence(topics, dictionary, docs):
     coherence = -1
     try:
-        coherence_model = gensim.models.CoherenceModel(
+        coherence = CoherenceModel(
             topics=topics,
             dictionary=dictionary,
             texts=docs,
             coherence="c_v",
-        )
-        coherence = coherence_model.get_coherence()
+        ).get_coherence()
     except:
         print("\ncould not calculate coherence.")
 
     return coherence
 
 
-def random_search(df, dictionary, num_runs):
-    hparam_file = "./hparams4.csv"
-    topic_count = range(10, 20, 2)
+def random_search(docs, dictionary, num_runs):
+    topic_count = range(10, 18, 2)
     iter_count = range(5, 25, 5)
-    hprange = [0.003, 0.01, 0.03, 0.1, 0.2, 0.3, 0.4]
+    brange = [0.2, 0.3, 0.4, 0.5]
+    arange = [0.01, 0.03, 0.06, 0.1, 0.2, 0.3, 0.4]
 
     tasks = []
     for _ in range(num_runs):
@@ -98,25 +98,25 @@ def random_search(df, dictionary, num_runs):
             "random_state": randint(0, 100000),
             "num_topics": choice(topic_count),
             "iters": choice(iter_count),
-            "alpha": choice(hprange),
-            "beta": choice(hprange),
+            "alpha": choice(arange),
+            "beta": choice(brange),
         }
-        tasks.append((df, dictionary, hparams))
+        tasks.append((docs, dictionary, hparams))
 
     NUM_WORKERS = cpu_count()
     with Pool(NUM_WORKERS) as pool:
         results = pool.map(create_gsdmm_model, tasks)
 
     results_df = pd.DataFrame()
-    if path.exists(hparam_file):
-        results_df = pd.read_csv(hparam_file, index_col=0)
+    if path.exists(HPARAM_FILE):
+        results_df = pd.read_csv(HPARAM_FILE, index_col=0)
 
     max_score = 0
     best_params = None
 
     for res in results:
         _, topics, hp = res
-        cs = get_coherence(topics, dictionary, df["tokens"])
+        cs = get_coherence(topics, dictionary, docs)
         hp["coherence"] = cs
         results_df = pd.concat([results_df, pd.DataFrame([hp])], ignore_index=True)
 
@@ -124,21 +124,21 @@ def random_search(df, dictionary, num_runs):
             max_score = cs
             best_params = hp
 
-    results_df.to_csv(hparam_file)
+    results_df.to_csv(HPARAM_FILE)
 
     return best_params
 
 
-def run_with_params(df, dictionary, hp):
-    df, topics, hp = create_gsdmm_model((df, dictionary, hp))
-    cs = get_coherence(topics, dictionary, df["tokens"])
+def run_with_params(docs, dictionary, hp):
+    topic_model, topics, hp = create_gsdmm_model((docs, dictionary, hp))
+    cs = get_coherence(topics, dictionary, docs)
     print("coherence: ", cs)
-    return df
+    return topic_model
 
 
 def main():
     cols = ["tweet_id", "text", "likes"]
-    df = pd.read_csv("./tweets.csv", usecols=cols)
+    df = pd.read_csv("./tweets.csv")
 
     df = preprocess(df)
 
@@ -147,18 +147,19 @@ def main():
     df = apply_dict_to_docs(df, dictionary)
 
     hparams = {
-        "random_state": 25056,
-        "num_topics": 8,
-        "iters": 5,
-        "alpha": 0.1,
-        "beta": 0.4,
+        "random_state": 16448,
+        "num_topics": 16,
+        "iters": 20,
+        "alpha": 0.06,
+        "beta": 0.5,
     }
 
-    # df = run_with_params(df, dictionary, hparams)
-    # df.head(50000).to_csv("clean.csv")
+    topic_model = run_with_params(df["tokens"], dictionary, hparams)
+    df["topic"] = topic_model
+    df.to_csv("clean.csv")
 
-    best_params = random_search(df, dictionary, 10)
-    print("best run params: ", best_params)
+    # best_params = random_search(df["tokens"], dictionary, 40)
+    # print("best run params: ", best_params)
 
 
 if __name__ == "__main__":
