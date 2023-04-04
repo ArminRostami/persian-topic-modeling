@@ -17,7 +17,6 @@ def read_stop_words():
 
 
 def remove_hashtags(text):
-    text = re.sub(r"#مهسا_امینی", "", text)
     text = re.sub(r"\n\s*#[^\n]*", "", text)
     return text
 
@@ -61,10 +60,6 @@ def tokenize(text):
 
 
 def formalize(word, inormalizer):
-    abbrs = {"ج": "جمهوری", "ا": "اسلام", "خونه": "خانه"}
-    if word in abbrs:
-        return abbrs[word]
-
     if word in inormalizer.lemmatizer.words or word in inormalizer.lemmatizer.verbs:
         return word
 

@@ -75,11 +75,11 @@ def write_response(writer, resp):
 
 def get_tweepy_client():
     conf = {
-        "consumer_key": "4mxtKMBfnKbNF6nTA4chwAE9q",
-        "consumer_secret": "LS0m3fd2PItVmuThL6CDYsyTCkBdDzNsQd3VapLQr8E29I4Zf2",
-        "access_token": "2879449662-eIW1DR0Wf041ae83bhrE7DQA61h1kHVDDcnwNeS",
-        "access_token_secret": "Dzv37H0LsrYHalpSVSedLnaWxmj8e4Xh4NVqrOzmJXP4l",
-        "bearer_token": "AAAAAAAAAAAAAAAAAAAAAJszjAEAAAAALo7BuAvooX2r%2F9zQlJf5BBos9Sk%3DOStRXqtdcBcWctTMeYwVMXlIFN1xni6XnrdmyooWSD5NTz5O93",
+        "consumer_key": "",
+        "consumer_secret": "",
+        "access_token": "",
+        "access_token_secret": "",
+        "bearer_token": "",
     }
     client = tweepy.Client(
         conf["bearer_token"],
@@ -103,7 +103,7 @@ def main():
         while tweet_count < 25000:
             next_tok = get_next_token()
             resp = client.search_recent_tweets(
-                query="lang:fa -is:reply -is:retweet #مهسا_امینی",
+                query="lang:fa -is:reply -is:retweet",
                 max_results=100,
                 expansions="author_id",
                 user_fields=["created_at", "username", "public_metrics"],
